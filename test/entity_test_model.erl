@@ -4,7 +4,8 @@
 
 %% TYPES
 -record(state, {
-    name :: term()
+    name :: term(),
+    data :: term()
 }).
 
 % -type state() :: #state{}.
@@ -13,29 +14,31 @@
 
 %% Entity callbacks
 -export([
-    init/2,
+    init/3,
     handle_attach/6,
     handle_detach/5,
     handle_call/5,
     handle_cast/4,
     handle_info/4,
     terminate/4,
+    load/1,
+    prepare_save/2,
     save/2
 ]).
 
-%%%%%%%%%
-%% API %%
-%%%%%%%%%
+%%
+%% API
+%%
 -spec start_link(entity:id()) ->
     {ok, pid()} | {error, term()}.
 start_link(Id) ->
     entity:start_link(?MODULE, Id, test_start_arg, [{unload, 100}, {hibernate, 50}]).
 
-%%%%%%%%%%%%%%%%%%%%%%
-%% Entity callbacks %%
-%%%%%%%%%%%%%%%%%%%%%%
-init(Id, test_start_arg) ->
-    {ok, #state{name=Id}}.
+%%
+%% entity callbacks
+%%
+init(Id, Data, test_start_arg) ->
+    {ok, #state{name=Id, data=Data}}.
 
 handle_attach(_Id, _Pid, wrong_role, test_attach_arg, _Clients, State) ->
     {deny, role_is_invalid, State};
@@ -59,5 +62,11 @@ handle_info(_Id, _Msg, _Clients, State) ->
 terminate(_Id, _Reason, _Clients, _State) ->
     ok.
 
-save(_Id, State) ->
-    {ok, State}.
+load(_Id) ->
+    {ok, data}.
+
+prepare_save(_Id, #state{data=Data}) ->
+    Data.
+
+save(_Id, data) ->
+    ok.

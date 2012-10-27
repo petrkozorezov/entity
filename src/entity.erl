@@ -39,34 +39,40 @@
 
 %% Если хочешь сделать сэйв когда-то ещё -- сделай это сам.
 %% Сейв, происходит в terminate'е, это надо понимать.
--callback init(id(), term()) ->
+-callback init(id(), Data::term(), Options::term()) ->
     {ok, entity_state()} | {error, term()}.
 
 -callback handle_attach(id(), pid(), role(), term(), attached(), entity_state()) ->
-    {ok, entity_state()} |
-    {deny, reason(), entity_state()}.
+      {ok, entity_state()}
+    | {deny, reason(), entity_state()}.
 
 -callback handle_detach(id(), pid(), role(), attached(), entity_state()) ->
     {ok, entity_state()}.
 
 -callback handle_call(id(), term(), pid(), attached(), entity_state()) ->
-    {reply, term(), entity_state()} |
-    {noreply, entity_state()} |
-    {stop, reason(), term(), entity_state()}.
+      {reply, term(), entity_state()}
+    | {noreply, entity_state()}
+    | {stop, reason(), term(), entity_state()}.
 
 -callback handle_cast(id(), term(), attached(), entity_state()) ->
-    {noreply, entity_state()} |
-    {stop, reason(), entity_state()}.
+      {noreply, entity_state()}
+    | {stop, reason(), entity_state()}.
 
 -callback handle_info(id(), term(), attached(), entity_state()) ->
-    {noreply, entity_state()} |
-    {stop, reason(), entity_state()}.
+      {noreply, entity_state()}
+    | {stop, reason(), entity_state()}.
 
 -callback terminate(id(), term(), attached(), entity_state()) ->
     any().
 
--callback save(id(), entity_state()) ->
-    {ok, entity_state()}.
+-callback load(id()) ->
+    {ok, Data::term()} | {error, Reason::term()}.
+
+-callback prepare_save(id(), entity_state()) ->
+    Data::term().
+
+-callback save(id(), Data::term()) ->
+    any().
 
 
 -record(state, {
@@ -74,6 +80,7 @@
     clients      = []  :: list(),
     monitors     = []  :: list(),
     mod                :: module(),
+    entity_saved_data  :: entity_state(),
     entity_state       :: entity_state(),
     unload_tref        :: reference(),
     hibernate          :: timeout(),
@@ -123,27 +130,34 @@ get_attached_roles(EntityPid, ClientPid) ->
 %%
 %% callbacks
 %%
-
 -spec init({module(), id(), term(), options()}) ->
     {ok, state()} | {stop, term()}.
 init({Mod, Id, Args, Options}) ->
     process_flag(trap_exit, true),
-
-    Unload = proplists:get_value(unload, Options, infinity),
+    Unload    = proplists:get_value(unload,    Options, infinity),
     Hibernate = proplists:get_value(hibernate, Options, infinity),
     State = #state{id=Id, mod=Mod, unload=Unload, hibernate=Hibernate},
-    try Mod:init(Id, Args) of
-        {ok, EntityState} ->
-            {ok, try_start_unload(State#state{entity_state=EntityState}), State#state.hibernate};
-        {stop, Reason} ->
-            {stop, Reason};
+    try Mod:load(Id) of
+        {ok, Data} ->
+            case Mod:init(Id, Data, Args) of
+                {ok, EntityState} ->
+                    {ok, try_start_unload(State#state{
+                        entity_saved_data = Data,
+                        entity_state      = EntityState
+                    }), State#state.hibernate};
+                {stop, Reason} ->
+                    {stop, Reason};
+                Other ->
+                    {stop, {bad_return_value, Other}}
+            end;
+        Error = {error, _} ->
+            {stop, Error};
         Other ->
             {stop, {bad_return_value, Other}}
     catch T:E ->
         handle_mod_error(State, {T, E}, {init, Args}, erlang:get_stacktrace()),
         {stop, {mod_error, T, E}}
     end.
-
 
 handle_call({attach, Role, Args}, {From, _}, State) ->
     case is_client(From, Role, State) of
@@ -318,12 +332,15 @@ get_roles(ClientPid, State) ->
     Roles.
 
 save(State=#state{mod=Mod}) ->
-    try Mod:save(State#state.id, State#state.entity_state) of
-        {ok, NewEntityState} ->
-            State#state{entity_state=NewEntityState};
-        Other ->
-            handle_mod_error(State, {bad_return_value, Other}, save, erlang:get_stacktrace()),
-            State
+    try
+        Data = Mod:prepare_save(State#state.id, State#state.entity_state),
+        case (Data == State#state.entity_saved_data) of
+            true ->
+                State;
+            false ->
+                Mod:save(State#state.id, Data),
+                State#state{entity_saved_data=Data}
+        end
     catch T:E ->
         handle_mod_error(State, {T, E}, save, erlang:get_stacktrace()),
         State

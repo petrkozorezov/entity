@@ -36,12 +36,9 @@ release: compile
 plts/otp.plt: ~/.dialyzer_plt
 	mkdir -p plts && cp ~/.dialyzer_plt plts/otp.plt
 
-plts/deps.plt: plts/otp.plt
-	$(DIALYZER) --add_to_plt --plt plts/otp.plt --output_plt plts/deps.plt -r deps; true
-
-dialyzer: plts/deps.plt
-	rm -rf `find apps -name ".eunit"`
-	$(DIALYZER) --plt plts/deps.plt -n --no_native -r apps; true
+dialyzer: plts/otp.plt
+	rm -rf ".eunit"
+	$(DIALYZER) --plt plts/otp.plt -n --no_native ebin; true
 
 #\
 #   -Wunmatched_returns -Werror_handling -Wrace_conditions -Wno_fun_app \

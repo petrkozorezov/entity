@@ -2,7 +2,7 @@
 -module(entity_tests).
 -include_lib("eunit/include/eunit.hrl").
 
--define(MANAGER, test_manager).
+-define(ENTITY_TYPE, test_type).
 -define(WRONGROLE, wrong_role).
 -define(ALLROLES, [correct_role, ?WRONGROLE]).
 -define(UIDS, [12, -15, 1000000000000000000000, 0, <<"qwerty">>, "asasas", palmface]).
@@ -10,25 +10,16 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% TESTS DESCRIPTIONS %%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%
-start_stop_test_() ->
-    {"Проверяем запуск и остановку менеджера",
-        {setup,
-            fun start_mgr/0,
-            fun(Pid) ->
-                stop_wait(Pid, shutdown)
-            end,
-            fun(Pid) ->
-                {inorder, [is_registered(Pid)]}
-            end}
-    }.
+start_stop_test() ->
+    ok = start(),
+    ok = stop(undefined).
+
 
 clients_test_() ->
     {"Тестируем работоспособность клиентов",
         {setup,
-            fun start_mgr/0,
-            fun(Pid) ->
-                stop_wait(Pid, shutdown)
-            end,
+            fun start/0,
+            fun stop/1,
             fun(_) ->
                 {inorder, %% TODO: Add inparallel too
                     [test_attach_detach()]
@@ -39,10 +30,8 @@ clients_test_() ->
 clients_unload_test_() ->
     {"Тестируем работоспособность выгрузки клиентов",
         {setup,
-            fun start_mgr/0,
-            fun(Pid) ->
-                stop_wait(Pid, shutdown)
-            end,
+            fun start/0,
+            fun stop/1,
             fun(_) ->
                 {inorder, %% TODO: Add inparallel too
                     [test_unload()]
@@ -50,19 +39,21 @@ clients_unload_test_() ->
             end}
     }.
 
-%%%%%%%%%%%%%%%%%%%%%%%
-%%% SETUP FUNCTIONS %%%
-%%%%%%%%%%%%%%%%%%%%%%%
-start_mgr() ->
-    {ok, Pid} = entity_manager:start_link(?MANAGER, {entity_test_model, start_link, []}),
-    Pid.
+%%
+%% SETUP FUNCTIONS
+%%
+start() ->
+    ok = entity:start(),
+    {ok, _} = entity:add_type(?ENTITY_TYPE, {entity_test_model, start_link, []}, 5000),
+    ok.
 
-%%%%%%%%%%%%%%%%%%%%
-%%% ACTUAL TESTS %%%
-%%%%%%%%%%%%%%%%%%%%
-is_registered(Pid) ->
-    [?_assert(is_pid(Pid)),
-        ?_assert(erlang:is_process_alive(Pid))].
+stop(_) ->
+    ok = entity:remove_type(?ENTITY_TYPE),
+    ok = entity:stop().
+
+%%
+%% ACTUAL TESTS
+%%
 
 test_attach_detach() ->
     [?_assert(attach_detach())].
@@ -70,29 +61,29 @@ test_attach_detach() ->
 test_unload() ->
     [?_assert(do_test_unload()), ?_assert(do_test_unload())].
 
-%%%%%%%%%%%%
-%% LOCALS %%
-%%%%%%%%%%%%
+%%
+%% LOCALS
+%%
 attach_detach() ->
     UidRole = [{Uid, Role} || Role <- ?ALLROLES, Uid <- ?UIDS],
     %% Attach
     lists:foreach(
         fun({Uid, Role}) ->
-            case entity_utils:attach(?MANAGER, Uid, Role, test_attach_arg) of
+            case entity:attach(?ENTITY_TYPE, Uid, Role, test_attach_arg) of
                 {ok, Pid} when is_pid(Pid) and (Role/=?WRONGROLE) ->
-                    ?assert(entity:is_attached(Pid, self(), Role)),
+                    ?assert(entity_obj:is_attached(Pid, self(), Role)),
                     ?assertError({badmatch,{error, already_attached}},
-                        {ok, Pid} = entity_utils:attach(?MANAGER, Uid, Role, test_attach_arg)),
-                    ?assertMatch(ok, entity:cast(Pid, hello_cast)),
-                    ?assertMatch(ok, entity:call(Pid, hello_call)),
+                        {ok, Pid} = entity:attach(?ENTITY_TYPE, Uid, Role, test_attach_arg)),
+                    ?assertMatch(ok, entity_obj:cast(Pid, hello_cast)),
+                    ?assertMatch(ok, entity_obj:call(Pid, hello_call)),
 
-                    ?assertMatch(ok, entity_utils:apply(?MANAGER, Uid,
+                    ?assertMatch(ok, entity:apply(?ENTITY_TYPE, Uid,
                         fun(Pid1) ->
-                            ok=entity:call(Pid1, hello_call)
+                            ok=entity_obj:call(Pid1, hello_call)
                         end, test_attach_arg)),
 
-                    ?assertMatch(ok, entity:detach(Pid, Role)),
-                    ?assertMatch({error, not_attached}, entity:detach(Pid, Role));
+                    ?assertMatch(ok, entity_obj:detach(Pid, Role)),
+                    ?assertMatch({error, not_attached}, entity_obj:detach(Pid, Role));
                 {error, {deny, role_is_invalid}} ->
                     ok
             end
@@ -107,9 +98,9 @@ do_test_unload() ->
     Uid = unload_tester,
 
     % изначально такого объекта нет
-    {error, not_registered_uid} = entity_manager:get_pid(?MANAGER, Uid),
+    {error, not_registered_uid} = entity_manager:get_pid(?ENTITY_TYPE, Uid),
     
-    {ok, Pid} = entity_utils:attach(?MANAGER, Uid, correct_role, test_attach_arg),
+    {ok, Pid} = entity:attach(?ENTITY_TYPE, Uid, correct_role, test_attach_arg),
 
     % ещё не захибернейтился, но жив
     timer:sleep(20),
@@ -120,14 +111,14 @@ do_test_unload() ->
     timer:sleep(100),
     true  = erlang:is_process_alive(Pid),
     true  = is_hibernated(Pid),
-    ok    = entity:call(Pid, hello_call),
+    ok    = entity_obj:call(Pid, hello_call),
 
-    ok    = entity:detach(Pid, correct_role),
+    ok    = entity_obj:detach(Pid, correct_role),
 
     % аттачей нет, выгрузился
     timer:sleep(120),
     false  = erlang:is_process_alive(Pid),
-    {error, not_registered_uid} = entity_manager:get_pid(?MANAGER, Uid),
+    {error, not_registered_uid} = entity_manager:get_pid(?ENTITY_TYPE, Uid),
 
     true.
 
@@ -140,12 +131,12 @@ is_hibernated(P) ->
         false
     end.
 
-stop_wait(Pid, Reason) ->
-    process_flag(trap_exit, true),
-    exit(Pid, Reason),
-    receive 
-        {'EXIT', Pid, Reason} -> ok
-    after
-        1000 -> exit(manager_stop_failed)
-    end,
-    process_flag(trap_exit, false).
+% stop_wait(Pid, Reason) ->
+%     process_flag(trap_exit, true),
+%     exit(Pid, Reason),
+%     receive 
+%         {'EXIT', Pid, Reason} -> ok
+%     after
+%         1000 -> exit(manager_stop_failed)
+%     end,
+%     process_flag(trap_exit, false).

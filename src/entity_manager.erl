@@ -36,8 +36,8 @@
 %% API
 %%
 -spec start_link(atom(), start_entity_fun()) -> {ok, pid()} | {error, term()}.
-start_link(Name, StartEntityFun) ->
-    gen_server:start_link({local, Name}, ?MODULE, StartEntityFun, []).
+start_link(Name, SupName) ->
+    gen_server:start_link({local, Name}, ?MODULE, SupName, []).
 
 -spec get_pid_or_spawn(name(), id()) -> {ok, pid()}.
 get_pid_or_spawn(ManagerName, Uid) ->
@@ -51,13 +51,12 @@ get_pid(ManagerName, Uid) ->
 %%
 %% gen_server callbacks
 %%
--spec init(start_entity_fun()) -> {ok, state()}.
-init(StartEntityFun) ->
-    {ok, Pid} = entity_sup:start_link(StartEntityFun),
+-spec init(atom()) -> {ok, state()}.
+init(SupName) ->
     {ok, #state{
         uid_pid    = ets:new(uids, [set, private]),
         pid_uid    = ets:new(pids, [set, private]),
-        entity_sup = Pid
+        entity_sup = SupName
     }}.
 
 
@@ -69,7 +68,7 @@ handle_call({get_pid_or_spawn, Uid}, _From, State=#state{uid_pid=U2P, pid_uid=P2
         case ets:lookup(U2P, Uid) of
             [{Uid, Pid1}] -> Pid1;
             [] ->
-                {ok, Pid2} = entity_sup:start_child(State#state.entity_sup, Uid),
+                {ok, Pid2} = entity_worker_sup:start_child(State#state.entity_sup, Uid),
                 ets:insert(U2P, {Uid, Pid2}),
                 ets:insert(P2U, {Pid2, Uid}),
                 erlang:monitor(process, Pid2),

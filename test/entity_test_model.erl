@@ -1,6 +1,6 @@
 %% For test purposes only !
 -module(entity_test_model).
--behaviour(entity).
+-behaviour(entity_obj).
 
 %% TYPES
 -record(state, {
@@ -32,7 +32,7 @@
 -spec start_link(entity:id()) ->
     {ok, pid()} | {error, term()}.
 start_link(Id) ->
-    entity:start_link(?MODULE, Id, test_start_arg, [{unload, 100}, {hibernate, 50}]).
+    entity_obj:start_link(?MODULE, Id, test_start_arg, [{unload, 100}, {hibernate, 50}]).
 
 %%
 %% entity callbacks

@@ -10,8 +10,8 @@
 -export([init/1]).
 
 %% Helper macro for declaring children of supervisor
--define(CHILD_WORKER(Mod, Args),     {Mod, {Mod, start_link, Args}, permanent, 5000, worker,     [Mod]}).
--define(CHILD_SUPERVISOR(Mod, Args), {Mod, {Mod, start_link, Args}, permanent, 5000, supervisor, [Mod]}).
+-define(CHILD_WORKER    (Mod, Args), {Mod, {Mod, start_link, Args}, permanent, brutal_kill, worker,     [Mod]}).
+-define(CHILD_SUPERVISOR(Mod, Args, Timeout), {Mod, {Mod, start_link, Args}, permanent, Timeout, supervisor, [Mod]}).
 
 -type options() :: {atom(), term()}.
 
@@ -27,10 +27,10 @@ start_link(Options) ->
 %%
 -spec init(options()) ->
     {ok, {{supervisor:strategy(), non_neg_integer(), non_neg_integer()}, [supervisor:child_spec()]}}.
-init({EntityTypeName, EntityStartFun}) ->
+init({EntityTypeName, EntityStartFun, SupStopTimeout, ObjStopTimeout}) ->
     WorkerSupName = gen_sup_name(EntityTypeName),
     {ok, {{one_for_all, 10, 100},[
-        ?CHILD_SUPERVISOR(entity_worker_sup, [{EntityTypeName, WorkerSupName, EntityStartFun}]),
+        ?CHILD_SUPERVISOR(entity_worker_sup, [{EntityTypeName, WorkerSupName, EntityStartFun, ObjStopTimeout}], SupStopTimeout),
         ?CHILD_WORKER(entity_manager, [EntityTypeName, WorkerSupName])
     ]}}.
 

@@ -44,7 +44,7 @@ clients_unload_test_() ->
 %%
 start() ->
     ok = entity:start(),
-    {ok, _} = entity:add_type(?ENTITY_TYPE, {entity_test_model, start_link, []}, 5000),
+    {ok, _} = entity:add_type(?ENTITY_TYPE, {entity_test_model, start_link, []}, 5000, 500),
     ok.
 
 stop(_) ->

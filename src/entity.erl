@@ -6,9 +6,9 @@
 -export([
     start/0,
     stop/0,
-    add_type/3,
+    add_type/4,
     remove_type/1,
-    child_spec/3,
+    child_spec/4,
     apply/3,
     apply/4,
     attach/4,
@@ -24,9 +24,9 @@ start() ->
 stop() ->
     application:stop(?MODULE).
 
--spec add_type(type_name(), start_entity_fun(), timeout()) -> ok | {error, term()}.
-add_type(TypeName, StartEntityFun, StopTimeout) ->
-    supervisor:start_child(entity_sup, child_spec(TypeName, StartEntityFun, StopTimeout)).
+-spec add_type(type_name(), start_entity_fun(), timeout(), timeout()) -> ok | {error, term()}.
+add_type(TypeName, StartEntityFun, SupStopTimeout, ObjStopTimeout) ->
+    supervisor:start_child(entity_sup, child_spec(TypeName, StartEntityFun, SupStopTimeout, ObjStopTimeout)).
 
 -spec remove_type(type_name()) -> ok | {error, term()}.
 remove_type(TypeName) ->
@@ -37,12 +37,12 @@ remove_type(TypeName) ->
             {error, Reason}
     end.
 
--spec child_spec(type_name(), start_entity_fun(), timeout()) -> supervisor:child_spec().
-child_spec(TypeName, StartEntityFun, StopTimeout)
+-spec child_spec(type_name(), start_entity_fun(), timeout(), timeout()) -> supervisor:child_spec().
+child_spec(TypeName, StartEntityFun, SupStopTimeout, ObjStopTimeout)
     when is_atom(TypeName) ->
     {TypeName, {entity_type_sup, start_link, [{
-        TypeName, StartEntityFun
-    }]}, permanent, StopTimeout, supervisor, [entity_type_sup]}.
+        TypeName, StartEntityFun, SupStopTimeout, ObjStopTimeout
+    }]}, permanent, SupStopTimeout, supervisor, [entity_type_sup]}.
 
 -spec apply(type_name(), id(), fun((pid()) -> any())) ->
     term() | {error, Reason::term()}.

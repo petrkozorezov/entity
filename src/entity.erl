@@ -42,7 +42,7 @@ child_spec(TypeName, StartEntityFun, SupStopTimeout, ObjStopTimeout)
     when is_atom(TypeName) ->
     {TypeName, {entity_type_sup, start_link, [{
         TypeName, StartEntityFun, SupStopTimeout, ObjStopTimeout
-    }]}, permanent, SupStopTimeout, supervisor, [entity_type_sup]}.
+    }]}, permanent, infinity, supervisor, [entity_type_sup]}.
 
 -spec apply(type_name(), id(), fun((pid()) -> any())) ->
     term() | {error, Reason::term()}.

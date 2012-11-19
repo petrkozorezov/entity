@@ -39,7 +39,7 @@
 start_link(Name, SupName) ->
     gen_server:start_link({local, Name}, ?MODULE, SupName, []).
 
--spec get_pid_or_spawn(name(), id()) -> {ok, pid()}.
+-spec get_pid_or_spawn(name(), id()) -> {ok, pid()} | {error, term()}.
 get_pid_or_spawn(ManagerName, Uid) ->
     gen_server:call(ManagerName, {get_pid_or_spawn, Uid}).
 
@@ -64,17 +64,21 @@ init(SupName) ->
                  ({get_pid, id()}, {pid(), term()}, state()) -> {reply, term(), state()};
                  ('none()', {pid(), term()}, state()) -> {noreply, {error, term()}}.
 handle_call({get_pid_or_spawn, Uid}, _From, State=#state{uid_pid=U2P, pid_uid=P2U}) ->
-    Pid = 
+    R = 
         case ets:lookup(U2P, Uid) of
-            [{Uid, Pid1}] -> Pid1;
+            [{Uid, Pid1}] -> {ok, Pid1};
             [] ->
-                {ok, Pid2} = entity_worker_sup:start_child(State#state.entity_sup, Uid),
-                ets:insert(U2P, {Uid, Pid2}),
-                ets:insert(P2U, {Pid2, Uid}),
-                erlang:monitor(process, Pid2),
-                Pid2
+                case entity_worker_sup:start_child(State#state.entity_sup, Uid) of
+                    {ok, Pid2} ->
+                        ets:insert(U2P, {Uid, Pid2}),
+                        ets:insert(P2U, {Pid2, Uid}),
+                        erlang:monitor(process, Pid2),
+                        {ok, Pid2};
+                    Err={error, _} ->
+                        Err
+                end
         end,
-    {reply, {ok, Pid}, State};
+    {reply, R, State};
 
 handle_call({get_pid, Uid}, {_From, _}, State) ->
     U2P   = State#state.uid_pid,

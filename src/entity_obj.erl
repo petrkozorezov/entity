@@ -154,8 +154,8 @@ init({Mod, Id, Args, Options}) ->
                 Other ->
                     {stop, {bad_return_value, Other}}
             end;
-        Error = {error, _} ->
-            {stop, Error};
+        {error, Reason} ->
+            {stop, Reason};
         Other ->
             {stop, {bad_return_value, Other}}
     catch T:E ->

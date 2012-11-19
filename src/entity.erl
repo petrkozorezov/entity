@@ -52,8 +52,12 @@ apply(TypeName, Id, Fun) ->
 -spec apply(type_name(), id(), fun((pid()) -> any()), term()) ->
     term() | {error, Reason::term()}.
 apply(TypeName, Id, Fun, Args) ->
-    {ok, Pid} = entity_manager:get_pid_or_spawn(TypeName, Id),
-    do_apply(Pid, Fun, Args, 3).
+    case entity_manager:get_pid_or_spawn(TypeName, Id) of
+        {ok, Pid} ->
+            do_apply(Pid, Fun, Args, 3);
+        Err={error, _} ->
+            Err
+    end.
 
 -spec attach(type_name(), id(), role(), term()) ->
     {ok, pid()} | {error, already_attached | {deny, term()} | term()}.
@@ -76,20 +80,24 @@ get_obj(TypeName, Id) ->
 do_attach(_TypeName, _Id, _Role, _Args, 0) ->
     exit(attach_attemps_limit_hit);
 do_attach(TypeName, Id, Role, Args, N) ->
-    {ok, Pid} = entity_manager:get_pid_or_spawn(TypeName, Id),
-    try entity_obj:attach(Pid, Role, Args) of
-        ok ->
-            {ok, Pid};
-        Error = {error, _} ->
-            Error
-    catch exit:{noproc, _} ->
-        do_attach(TypeName, Id, Role, Args, N - 1)
+    case entity_manager:get_pid_or_spawn(TypeName, Id) of
+        {ok, Pid} ->
+            try entity_obj:attach(Pid, Role, Args) of
+                ok ->
+                    {ok, Pid};
+                Error = {error, _} ->
+                    Error
+            catch exit:{noproc, _} ->
+                do_attach(TypeName, Id, Role, Args, N - 1)
+            end;
+        Err={error, _} ->
+            Err
     end.
 
 
 do_apply(_, _, _, 0) ->
     exit(apply_attemps_limit_hit);
-do_apply(Pid, Fun, Args, N) ->
+do_apply(Pid, Fun, Args, N) when N > 0 ->
     try
         Fun(Pid)
     catch

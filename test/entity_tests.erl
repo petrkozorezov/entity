@@ -21,7 +21,7 @@ clients_test_() ->
             fun start/0,
             fun stop/1,
             fun(_) ->
-                {inorder, %% TODO: Add inparallel too
+                {inorder,
                     [test_attach_detach()]
                 }
             end}
@@ -33,7 +33,7 @@ clients_unload_test_() ->
             fun start/0,
             fun stop/1,
             fun(_) ->
-                {inorder, %% TODO: Add inparallel too
+                {inorder,
                     [test_unload()]
                 }
             end}

@@ -10,9 +10,10 @@
     call/2,
     cast/2,
     attach/3,
+    attach/4,
     detach/2,
-    is_attached/3,
-    get_attached_roles/2
+    detach/3,
+    is_attached/3
 ]).
 
 %% gen_server callbacks
@@ -32,14 +33,15 @@
     reason/0,
     option/0
 ]).
+-type save_strategy() :: list(after_requests | after_last_detach).
 -type option()  ::   {unload, timeout()}
                    | {hibernate, timeout()}
+                   | {save_strategy, save_strategy()}
 .
 -type options() :: list(option()).
 
-
-%% TODO: опционально save после коллбэков
-%%       вынести в meck тестовый модуль
+%% TODO: вынести в meck тестовый модуль
+%%       вынести сейв из terminate в простое сообщение перед выгрузкой
 
 %% Если хочешь сделать сэйв когда-то ещё -- сделай это сам.
 %% Сейв, происходит в terminate'е, это надо понимать.
@@ -47,7 +49,7 @@
     {ok, entity_state()} | {error, term()}.
 
 -callback handle_attach(id(), pid(), role(), term(), attached(), entity_state()) ->
-      {ok, entity_state()}
+      {ok, entity_state(), attach_context()}
     | {deny, reason(), entity_state()}.
 
 -callback handle_detach(id(), pid(), role(), attached(), entity_state()) ->
@@ -88,7 +90,8 @@
     entity_state       :: entity_state(),
     unload_tref        :: reference(),
     hibernate          :: timeout(),
-    unload             :: timeout()
+    unload             :: timeout(),
+    save_strategy      :: save_strategy()
 }).
 -type state()            :: #state{}.
 
@@ -108,11 +111,19 @@ start_link(Mod, Id, Args, Options) ->
 
 -spec attach(pid(), role(), term()) -> ok | {error, already_attached | {deny, term()}}.
 attach(Pid, Role, Args)->
-    gen_server:call(Pid, {attach, Role, Args}).
+    attach(Pid, self(), Role, Args).
+
+-spec attach(pid(), pid(), role(), term()) -> ok | {error, already_attached | {deny, term()}}.
+attach(EntityPid, ClientPid, Role, Args)->
+    gen_server:call(EntityPid, {attach, ClientPid, Role, Args}).
 
 -spec detach(pid(), role()) -> ok | {error, not_attached}.
 detach(Pid, Role) ->
-    gen_server:call(Pid, {detach, Role}).
+    detach(Pid, self(), Role).
+
+-spec detach(pid(), pid(), role()) -> ok | {error, not_attached}.
+detach(EntityPid, ClientPid, Role) ->
+    gen_server:call(EntityPid, {detach, ClientPid, Role}).
 
 -spec call(pid(), term()) -> term().
 call(Pid, Call) ->
@@ -124,12 +135,7 @@ cast(Pid, Cast) ->
 
 -spec is_attached(pid(), pid(), role()) -> boolean().
 is_attached(EntityPid, ClientPid, Role) ->
-    Roles = get_attached_roles(EntityPid, ClientPid),
-    lists:member(Role, Roles).
-
--spec get_attached_roles(pid(), pid()) -> list().
-get_attached_roles(EntityPid, ClientPid) ->
-    gen_server:call(EntityPid, {get_attached_roles, ClientPid}).
+    gen_server:call(EntityPid, {is_attached, ClientPid, Role}).
 
 %%
 %% callbacks
@@ -138,17 +144,19 @@ get_attached_roles(EntityPid, ClientPid) ->
     {ok, state()} | {stop, term()}.
 init({Mod, Id, Args, Options}) ->
     process_flag(trap_exit, true),
-    Unload    = proplists:get_value(unload,    Options, infinity),
-    Hibernate = proplists:get_value(hibernate, Options, infinity),
-    State = #state{id=Id, mod=Mod, unload=Unload, hibernate=Hibernate},
+    Unload       = proplists:get_value(unload,    Options, infinity),
+    Hibernate    = proplists:get_value(hibernate, Options, infinity),
+    SaveStrategy = proplists:get_value(save_strategy, Options, []  ),
+    State = #state{id=Id, mod=Mod, unload=Unload, hibernate=Hibernate, save_strategy=SaveStrategy},
     try Mod:load(Id) of
         {ok, Data} ->
             case Mod:init(Id, Data, Args) of
                 {ok, EntityState} ->
-                    {ok, try_start_unload(State#state{
+                    NewState = State#state{
                         entity_saved_data = Data,
                         entity_state      = EntityState
-                    }), State#state.hibernate};
+                    },
+                    {ok, try_start_unload(NewState), NewState#state.hibernate};
                 {stop, Reason} ->
                     {stop, Reason};
                 Other ->
@@ -163,33 +171,35 @@ init({Mod, Id, Args, Options}) ->
         {stop, {mod_error, T, E}}
     end.
 
-handle_call({attach, Role, Args}, {From, _}, State) ->
-    case is_client(From, Role, State) of
+handle_call({attach, Pid, Role, Args}, _, State) ->
+    case is_client(Pid, Role, State) of
         false ->
-            {Reply, NewState} = do_attach(From, Role, Args, State),
+            {Reply, NewState} = do_attach(Pid, Role, Args, State),
             {reply, Reply, try_start_unload(NewState), NewState#state.hibernate};
         true  ->
             {reply, {error, already_attached},  State}
     end;
 
-handle_call({detach, Role}, {From, _}, State) ->
-    case is_client(From, Role, State) of
+handle_call({detach, Pid, Role}, _, State) ->
+    case is_client(Pid, Role, State) of
         true   ->
-            NewState = do_detach(From, Role, State),
+            NewState = do_detach(Pid, Role, State),
             NewState2 = save_if_needed(NewState),
             {reply, ok, try_start_unload(NewState2), NewState#state.hibernate};
         false  -> {reply, {error, not_attached}, try_start_unload(State)}
     end;
 
-handle_call({get_attached_roles, Pid}, _, State) ->
-    {reply, get_roles(Pid, State), State};
+handle_call({is_attached, ClientPid, Role}, _, State) ->
+    {reply, is_client(ClientPid, Role, State), State};
 
 handle_call({call, Call}, {From, _}, State=#state{mod=Mod}) ->
     try Mod:handle_call(State#state.id, Call, From, State#state.clients, State#state.entity_state) of
         {reply, Reply, NewEntityState} ->
-            {reply, Reply, try_start_unload(State#state{entity_state=NewEntityState}), State#state.hibernate};
+            NewState = State#state{entity_state=NewEntityState},
+            {reply, Reply, try_start_unload(try_save(after_requests, NewState)), NewState#state.hibernate};
         {noreply, NewEntityState} ->
-            {noreply, try_start_unload(State#state{entity_state=NewEntityState}), State#state.hibernate};
+            NewState = State#state{entity_state=NewEntityState},
+            {noreply, try_start_unload(try_save(after_requests, NewState)), NewState#state.hibernate};
         {stop, Reason, Reply, NewEntityState} ->
             {stop, Reason, Reply, State#state{entity_state=NewEntityState}};
         Other ->
@@ -208,7 +218,8 @@ handle_call(Msg, {From, _}, State) ->
 handle_cast({cast, Cast}, State=#state{mod=Mod}) ->
     try Mod:handle_cast(State#state.id, Cast, State#state.clients, State#state.entity_state) of
         {noreply, NewEntityState} ->
-            {noreply, try_start_unload(State#state{entity_state=NewEntityState}), State#state.hibernate};
+            NewState = State#state{entity_state=NewEntityState},
+            {noreply, try_start_unload(try_save(after_requests, NewState)), State#state.hibernate};
         {stop, Reason, NewEntityState} ->
             {stop, Reason, State#state{entity_state=NewEntityState}};
         Other ->
@@ -231,9 +242,9 @@ handle_info(Info={'DOWN', Ref, process, From, _}, State) ->
         _ ->
             NewState =
                 lists:foldl(
-                    fun ({Pid, Role}, AccState) when (Pid==From) ->
+                    fun ({Pid, Role, _}, AccState) when (Pid==From) ->
                             do_detach(Pid, Role, AccState);
-                        (_, AccState) ->
+                        ({_, _, _}, AccState) ->
                             AccState
                     end,
                     State,
@@ -266,7 +277,7 @@ terminate(Reason, State=#state{mod=Mod}) ->
 %%
 do_attach(Pid, Role, Args, State=#state{mod=Mod}) ->
     try Mod:handle_attach(State#state.id, Pid, Role, Args, State#state.clients, State#state.entity_state) of
-        {ok, NewEntityState} ->
+        {ok, NewEntityState, AttachContext} ->
             NewMonitors =
                 case lists:keyfind(Pid, 1, State#state.monitors) of
                     false ->
@@ -277,7 +288,7 @@ do_attach(Pid, Role, Args, State=#state{mod=Mod}) ->
                 end,
             {ok, State#state{
                 entity_state=NewEntityState,
-                clients=[{Pid, Role} | State#state.clients],
+                clients=add_attached({Pid, Role, AttachContext}, State#state.clients),
                 monitors=NewMonitors
             }};
         {deny, Reason, NewEntityState} ->
@@ -291,7 +302,7 @@ do_attach(Pid, Role, Args, State=#state{mod=Mod}) ->
     end.
 
 do_detach(Pid, Role, State=#state{mod=Mod, monitors=Monitors}) ->
-    NewClients = lists:delete({Pid, Role}, State#state.clients),
+    NewClients = delete_attached(Pid, Role, State#state.clients),
     ClientRoles = get_roles(Pid, State),
     NewMonitors =
         case lists:keyfind(Pid, 1, Monitors) of
@@ -317,7 +328,8 @@ do_detach(Pid, Role, State=#state{mod=Mod, monitors=Monitors}) ->
 do_handle_info(Info, State=#state{mod=Mod}) ->
     try Mod:handle_info(State#state.id, Info, State#state.clients, State#state.entity_state) of
         {noreply, NewEntityState} ->
-            {noreply, try_start_unload(State#state{entity_state=NewEntityState}), State#state.hibernate};
+            NewState = State#state{entity_state=NewEntityState},
+            {noreply, try_start_unload(NewState), NewState#state.hibernate};
         {stop, Reason, NewEntityState} ->
             {stop, Reason, State#state{entity_state=NewEntityState}};
         Other ->
@@ -329,10 +341,10 @@ do_handle_info(Info, State=#state{mod=Mod}) ->
     end.
 
 is_client(Pid, Role, State) ->
-    lists:member({Pid, Role}, State#state.clients).
+    find_attached(Pid, Role, State#state.clients) /= false.
 
 get_roles(ClientPid, State) ->
-    {_Pids, Roles} = lists:unzip(lists:filter(fun({Pid, _}) -> Pid == ClientPid end, State#state.clients)),
+    {_, Roles, _} = lists:unzip3(lists:filter(fun({Pid, _, _}) -> Pid == ClientPid end, State#state.clients)),
     Roles.
 
 save(State=#state{mod=Mod}) ->
@@ -351,9 +363,15 @@ save(State=#state{mod=Mod}) ->
     end.
 
 save_if_needed(State=#state{clients=[]}) ->
-    save(State);
+    try_save(after_last_detach, State);
 save_if_needed(State=#state{}) ->
     State.
+
+try_save(Event, State=#state{save_strategy=SaveStrategy}) ->
+    case lists:member(Event, SaveStrategy) of
+        true -> save(State);
+        false -> State
+    end.
 
 try_start_unload(State=#state{unload=infinity}) ->
     State;
@@ -382,3 +400,22 @@ handle_mod_error(State, Reason, When, Stacktrace) ->
         "** Stacktrace: ~p~n",
         [State#state.id, Reason, When, State#state.entity_state, Stacktrace]
     ).
+
+find_attached(_, _, []) ->
+    false;
+find_attached(Pid0, Role0, [V={Pid1, Role1, _}|_])
+    when (Pid0 == Pid1) and (Role0 == Role1) ->
+    V;
+find_attached(Pid, Role, [_|T]) ->
+    find_attached(Pid, Role, T).
+
+add_attached(Attached, AttachedList) ->
+    [Attached|AttachedList].
+
+delete_attached(Pid, Role, AttachedList) ->
+    case find_attached(Pid, Role, AttachedList) of
+        false ->
+            AttachedList;
+        Attached ->
+            lists:delete(Attached, AttachedList)
+    end.

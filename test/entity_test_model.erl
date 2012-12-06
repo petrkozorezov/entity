@@ -32,7 +32,11 @@
 -spec start_link(entity:id()) ->
     {ok, pid()} | {error, term()}.
 start_link(Id) ->
-    entity_obj:start_link(?MODULE, Id, test_start_arg, [{unload, 100}, {hibernate, 50}]).
+    entity_obj:start_link(?MODULE, Id, test_start_arg, [
+        {unload, 100},
+        {hibernate, 50},
+        {save_strategy, [after_requests, after_last_detach]}
+    ]).
 
 %%
 %% entity callbacks
@@ -43,7 +47,7 @@ init(Id, Data, test_start_arg) ->
 handle_attach(_Id, _Pid, wrong_role, test_attach_arg, _Clients, State) ->
     {deny, role_is_invalid, State};
 handle_attach(_Id, _Pid, _, test_attach_arg, _Clients, State) ->
-    {ok, State}.
+    {ok, State, context}.
 
 handle_detach(_Id, _Pid, _, _Clients, State) ->
     {ok, State}.

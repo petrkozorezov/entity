@@ -12,7 +12,9 @@
     apply/3,
     apply/4,
     attach/4,
+    attach/5,
     detach/3,
+    detach/4,
     get_obj/2
 ]).
 
@@ -62,13 +64,22 @@ apply(TypeName, Id, Fun, Args) ->
 -spec attach(type_name(), id(), role(), term()) ->
     {ok, pid()} | {error, already_attached | {deny, term()} | term()}.
 attach(TypeName, Id, Role, Args)->
-    do_attach(TypeName, Id, Role, Args, 10).
+    do_attach(TypeName, Id, self(), Role, Args, 10).
+
+-spec attach(type_name(), id(), pid(), role(), term()) ->
+    {ok, pid()} | {error, already_attached | {deny, term()} | term()}.
+attach(TypeName, Id, ClientPid, Role, Args)->
+    do_attach(TypeName, Id, ClientPid, Role, Args, 10).
 
 -spec detach(type_name(), id(), role()) -> ok | {error, not_attached}.
 detach(TypeName, Id, Role) ->
+    detach(TypeName, Id, self(), Role).
+
+-spec detach(type_name(), id(), pid(), role()) -> ok | {error, not_attached}.
+detach(TypeName, Id, ClientPid, Role) ->
     case entity_manager:get_pid(TypeName, Id) of
         {ok, Pid} ->
-            entity_obj:detach(Pid, Role);
+            entity_obj:detach(Pid, ClientPid, Role);
         {error, not_registered_uid} ->
             {error, not_attached}
     end.
@@ -77,18 +88,18 @@ detach(TypeName, Id, Role) ->
 get_obj(TypeName, Id) ->
     entity_manager:get_pid_or_spawn(TypeName, Id).
 
-do_attach(_TypeName, _Id, _Role, _Args, 0) ->
+do_attach(_TypeName, _Id, _ClientPid, _Role, _Args, 0) ->
     exit(attach_attemps_limit_hit);
-do_attach(TypeName, Id, Role, Args, N) ->
+do_attach(TypeName, Id, ClientPid, Role, Args, N) ->
     case entity_manager:get_pid_or_spawn(TypeName, Id) of
         {ok, Pid} ->
-            try entity_obj:attach(Pid, Role, Args) of
+            try entity_obj:attach(Pid, ClientPid, Role, Args) of
                 ok ->
                     {ok, Pid};
                 Error = {error, _} ->
                     Error
             catch exit:{noproc, _} ->
-                do_attach(TypeName, Id, Role, Args, N - 1)
+                do_attach(TypeName, Id, ClientPid, Role, Args, N - 1)
             end;
         Err={error, _} ->
             Err
